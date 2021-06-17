@@ -1,0 +1,338 @@
+//아두이노 온습도센서 DHT11을 사용하기위해 위에서 설치해두었던 라이브러리 불러옴
+#include <DHT11.h>
+
+//스텝모터 라이브러리 추가
+#include <Stepper.h>
+
+
+//Example shows how to connect to Firebase RTDB and perform basic operation for set, get, push and update data to database
+
+//Required WiFiNINA Library for Arduino from https://github.com/arduino-libraries/WiFiNINA
+
+#include "Firebase_Arduino_WiFiNINA.h"
+
+#define FIREBASE_HOST "window-b86bd-default-rtdb.firebaseio.com"
+#define FIREBASE_AUTH "fFlXmH0L8WdAiYX0EXVYH9Q8uJHQDjRQFeKnATcK"
+#define WIFI_SSID "mjhotspot"
+#define WIFI_PASSWORD "56195619"
+
+//Define Firebase data object
+FirebaseData firebaseData;
+
+/////////////////////////////////////////////////////
+/*불러온 라이브러리 안에 몇번 PIN에서 데이터값이 나오는지
+ 설정해줘야 함 아날로그 0번 PIN인 A0으로 설정 */
+DHT11 dht11(A0); 
+
+//테스트-LED
+int led = 6;
+
+//빗물감지센서 핀
+int rain = A1;
+
+//스텝모터
+int stepsPerRev = 2048; //한바퀴(360):2048, 반 바퀴(180):1024
+Stepper stepper (stepsPerRev, 4,2,3,1); //순서: (IN4,IN2,IN3,IN1)
+
+//미세먼지 센서
+int dust_sensor = A2;   // 미세먼지 핀 번호
+float dust_value = 0;  // 센서에서 입력 받은 미세먼지 값
+float dustDensityug=0;  // ug/m^3 값을 계산
+int sensor_led = 12;      // 미세먼지 센서 안에 있는 적외선 led 핀 번호
+int sampling = 280;    // 적외선 led를 키고, 센서 값을 읽어 들여 미세먼지를 측정하는 샘플링 시간
+int waiting = 40;    
+float stop_time = 9680;   // 센서를 구동하지 않는 시간
+//
+
+
+//적외선
+int infrared  = 7; //적외선 센서 디지털 3번핀
+unsigned long time_previous, time_current;
+
+void setup()
+{
+
+  Serial.begin(115200);
+  delay(100);
+
+  //스텝모터_스피트 설정
+  stepper.setSpeed(10);
+
+  //적외선
+  pinMode(infrared, INPUT);
+  time_previous = millis();
+
+  //빗방울 감지핀을 아날로그 입력으로 설정
+  pinMode(A1 , INPUT);  
+
+  //미세먼지 센서
+  pinMode(sensor_led,OUTPUT); // 미세먼지 적외선 led를 출력으로 설정
+
+  //와이파이 연결 
+  Serial.println();
+  Serial.print("Connecting to Wi-Fi");
+  int status = WL_IDLE_STATUS;
+  while (status != WL_CONNECTED)
+  {
+    status = WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("연동완료");
+  Serial.println("------------------------------");
+
+
+  //Provide the autntication data
+  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH, WIFI_SSID, WIFI_PASSWORD);
+  Firebase.reconnectWiFi(true);
+
+  String path = "/UNO_WiFi_REV2_Test";
+  String jsonStr;
+
+
+  //여기부터 아두이노 센서 정보
+  pinMode(led, OUTPUT);
+}
+
+
+
+
+
+
+
+void loop()
+{
+
+
+
+     if(Firebase.getString(firebaseData,"Window"))
+      {
+        Serial.println("------------------------------"); 
+        Serial.println("현재 창문상태: ");
+        Serial.println(firebaseData.stringData());
+        Serial.println("------------------------------"); 
+      }
+     
+
+  //적외선
+  int state = digitalRead(infrared);
+  time_current = millis();
+
+
+
+   //시이얼 모니터로 입력받는거
+   int ch = Serial.read();
+
+   //적외선
+   int infrared  = 7; //적외선 센서 디지털 3번핀
+   unsigned long time_previous, time_current;
+
+
+   
+    //미세먼지 측정    
+    digitalWrite(sensor_led, LOW);    // LED 켜기
+    delayMicroseconds(sampling);   // 샘플링해주는 시간.   
+    dust_value = analogRead(dust_sensor); // 센서 값 읽어오기   
+    delayMicroseconds(waiting);  // 너무 많은 데이터 입력을 피해주기 위해 잠시 멈춰주는 시간.   
+    digitalWrite(sensor_led, HIGH); // LED 끄기
+    delayMicroseconds(stop_time);   // LED 끄고 대기     
+    dustDensityug = (0.17 * (dust_value * (5.0 / 1024)) - 0.1) * 1000;    // 미세먼지 값 계산  
+    //Serial.print("Dust Density [ug/m3]: ");            // 시리얼 모니터에 미세먼지 값 출력
+   // Serial.print(dustDensityug);
+
+
+
+   //온도와 습도 값이 저장될 변수 온습도값이 
+   //(소수점이기때문에 float변수를 사용)
+   float temp, humi;
+   /*DHT.h 함수안에 dht11이라는 메소드를 사용해서 현재 온습도 값을 자동으로 계산함
+     계산후 현재 온습도가 데이터가 나오는지 아닌지 판단한 리턴값을 result_dht11 변수에 저장
+     dht11메소드 에서는 온습도가 잘 감지되면 0이라는 
+     리턴값을 보냄
+    */
+   int result_dht11 = dht11.read(humi, temp);
+
+
+      if(state == 1)
+      {
+        if (time_current - time_previous >= 1000)
+        { //적외선 센서 5초동안 감지 
+          time_previous = time_current;
+
+          Serial.print("적외선센서: ");
+          Serial.println("Warning");
+          stepper.step(stepsPerRev); 
+          Firebase.setString(firebaseData, "Window", "창문이 닫혔습니다.");
+
+        }
+       else if (state == 0)
+       {
+           Serial.print("적외선센서: ");
+           Serial.println("Safe");
+        }
+      }
+
+      if(Firebase.getString(firebaseData,"Window"))
+      {
+        
+        if(firebaseData.stringData()== "창문을 열겠습니다.")
+        {
+          stepper.step(-stepsPerRev); 
+          stepper.step(-stepsPerRev); 
+          Firebase.setString(firebaseData, "Window", "창문이 열렸습니다.");
+        } 
+        
+        if(firebaseData.stringData()== "창문을 닫겠습니다.")
+        {
+          stepper.step(stepsPerRev); 
+          stepper.step(stepsPerRev); 
+          Firebase.setString(firebaseData, "Window", "창문이 닫혔습니다.");
+        }
+      }
+     
+
+    //스텝모터_기본테스트
+      if(ch == '5')
+      {
+       Firebase.setString(firebaseData, "dust", "나쁨"); 
+       stepper.step(stepsPerRev); 
+       stepper.step(stepsPerRev); 
+        delay(1000);
+      }   
+
+        if(ch == '9')
+        {
+          Firebase.setString(firebaseData, "dust", "좋음"); 
+      
+        }
+    
+
+  
+   //온습도가 잘 측정이되서 result_dht11 변수에 0이라는 값이 들어오면 if문 실행        
+  
+   if (result_dht11 == 0)
+   {
+      Serial.println("------------------------------"); 
+      
+       //온도
+       if(Firebase.setInt(firebaseData,"집의 온도", temp))
+        {
+           Serial.print("temperature:"); 
+           Serial.println(temp); //온도값이 출력
+        }
+        else
+        {
+          Serial.println("FALE");
+        }
+  
+        //습도
+        if(Firebase.setInt(firebaseData,"집의 습도", humi))
+        {
+           Serial.print("humidity:   "); 
+           Serial.println(humi); //온도값이 출력
+        }
+        else
+        {
+          Serial.println("FALE");
+        }
+        
+     Serial.println("------------------------------"); 
+   }
+   else
+   {
+     Serial.print("온습도 측정 안됨"); 
+     Serial.println();
+   }
+
+
+     /*일반적인 딜레이 값이 아니라 DHT11에서 권장하는 
+    딜레이함수를 사용해줘야 정상적인 값이 나옴 옆에는 DHT11 라이브러리안에
+     미리 설정되어있는 딜레이시간을 적용시킨 모습
+     */
+     
+    delay(DHT11_RETRY_DELAY); 
+
+    //빗물감지되면 스텝모터 돌기
+    if(analogRead(A1) < 500)
+    {
+      Serial.println("------------------------------"); 
+      Serial.print("날씨: ");
+      Serial.println("비 오고 있음");
+      stepper.step(stepsPerRev); 
+      stepper.step(stepsPerRev); 
+      delay(1000);
+     
+      Firebase.setString(firebaseData, "Weather", "rain");
+      Firebase.setString(firebaseData, "Window", "창문이 닫혔습니다.");
+    }
+    else  
+    { 
+     Serial.println("------------------------------");  
+     Serial.print("날씨: ");                             
+     Serial.println("비 안 오고 있음");   
+     Firebase.setString(firebaseData, "Weather", "sunny");                   
+    } 
+
+
+
+
+    //미세먼지   
+    if(dustDensityug <= 34.0) // 대기 중 미세먼지가 좋음
+    {    
+      Serial.println("------------------------------");   
+      Serial.print("미세먼지: ");
+      Serial.print(dustDensityug);
+      Serial.println(" -좋음");
+      Firebase.setString(firebaseData, "dust", "좋음");
+      Serial.println("------------------------------"); 
+    }
+    else if(34.0 < dustDensityug && dustDensityug <= 80.0)  // 대기 중 미세먼지가 보통
+    {     
+       Serial.println("------------------------------");   
+       Serial.print("미세먼지: ");
+       Serial.print(dustDensityug);
+       Serial.println(" -보통");  
+      // stepper.step(stepsPerRev); 
+       //stepper.step(stepsPerRev);
+       Firebase.setString(firebaseData, "dust", "보통");  
+       Serial.println("------------------------------");
+    }
+    else if (80.0 < dustDensityug && dustDensityug <= 150.0) // 대기 중 미세먼지가 나쁨
+    {    
+       Serial.println("------------------------------\n");   
+       Serial.print("미세먼지: ");
+       Serial.print(dustDensityug);    
+       Serial.println(" -나쁨"); 
+       Firebase.setString(firebaseData, "dust", "나쁨"); 
+       stepper.step(stepsPerRev); 
+       stepper.step(stepsPerRev); 
+       delay(1000);
+       
+       Firebase.setString(firebaseData, "Weather", "rain");
+       Firebase.setString(firebaseData, "Window", "창문이 닫혔습니다.");
+       Serial.println("------------------------------");
+
+     
+   
+    }
+    else  // 대기 중 미세먼지가 매우 나쁨 
+    {        
+      Serial.println("------------------------------");   
+      Serial.print("미세먼지: ");   
+      Serial.print(dustDensityug);                                          
+      Serial.println(" -매우나쁨");
+      Firebase.setString(firebaseData, "dust", "나쁨"); 
+      stepper.step(stepsPerRev); 
+      stepper.step(stepsPerRev); 
+      delay(1000);
+      
+      Firebase.setString(firebaseData, "Weather", "rain");
+      Firebase.setString(firebaseData, "Window", "창문이 닫혔습니다.");
+      Serial.println("------------------------------");     
+    }
+
+
+}
